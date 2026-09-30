@@ -43,7 +43,7 @@ namespace winaudiomixer
     {
         for (const auto &[application, volume] : volumes_)
         {
-            winaudiomixer::Logger::info("Application: " + application + ", Volume: " + std::to_string(volume));
+            winaudiomixer::Logger::debug("Application: " + application + ", Volume: " + std::to_string(volume));
         }
     }
 } // namespace winaudiomixer
