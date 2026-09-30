@@ -1,0 +1,87 @@
+# =========================
+# Build directories
+# =========================
+build/
+out/
+cmake-build-*/
+[Bb]uild/
+[Bb]uilds/
+
+# =========================
+# Visual Studio
+# =========================
+.vs/
+*.user
+*.suo
+*.vcxproj.user
+
+# =========================
+# CMake
+# =========================
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+compile_commands.json
+install_manifest.txt
+
+# CMake generated files
+*.cmake.user
+
+# =========================
+# Compiled binaries
+# =========================
+*.exe
+*.dll
+*.lib
+*.obj
+*.o
+*.a
+*.pdb
+*.ilk
+*.exp
+
+# =========================
+# Debug / Release
+# =========================
+Debug/
+Release/
+x64/
+x86/
+Win32/
+ARM/
+ARM64/
+
+# =========================
+# Visual Studio Code
+# =========================
+.vscode/
+
+# =========================
+# Rider / JetBrains
+# =========================
+.idea/
+*.sln.iml
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# Temporary files
+# =========================
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+desktop.ini
