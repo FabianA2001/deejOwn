@@ -239,7 +239,7 @@ bool SerialReader::readValues(std::vector<int>& values)
     }
 
     try {
-        values = parseValues(cleaned, expectedValues_ == 0 ? 5 : expectedValues_);
+        values = parseValues(cleaned, expectedValues_ == 0 ? 1 : expectedValues_);
     } catch (const std::exception&) {
         return false;
     }

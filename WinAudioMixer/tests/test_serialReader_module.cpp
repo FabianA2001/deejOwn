@@ -28,7 +28,8 @@ int main(){
         return 1;
     }
 
-    while (1){
+    // while (1){
+    for(int i = 0; i<10;i++){
         std::vector<int> values;
         serialReader.readValues(values);
         std::string output = "";
@@ -37,5 +38,7 @@ int main(){
             output += " ";
         }
         winaudiomixer::Logger::info(output);
+
     }
+    serialReader.close();
 }
