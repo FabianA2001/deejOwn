@@ -17,7 +17,7 @@ public:
 
 private:
     std::size_t windowSize_;
-    std::vector<int> history_;
+    std::vector<std::vector<int>> history_;
 };
 
 } // namespace winaudiomixer
