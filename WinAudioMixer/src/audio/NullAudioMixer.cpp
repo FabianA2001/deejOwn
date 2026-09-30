@@ -13,18 +13,6 @@ namespace winaudiomixer
         return true;
     }
 
-    bool NullAudioMixer::getApplicationVolume(const std::string &application, float &outVolume) const
-    {
-        const auto it = volumes_.find(application);
-        if (it == volumes_.end())
-        {
-            return false;
-        }
-
-        outVolume = it->second;
-        return true;
-    }
-
     std::vector<std::string> NullAudioMixer::getAvailableApplications() const
     {
         return {

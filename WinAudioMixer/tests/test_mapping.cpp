@@ -4,34 +4,30 @@
 #include <string>
 #include <vector>
 
-namespace {
+namespace
+{
 
-class TestAudioMixer : public winaudiomixer::IAudioMixer {
-public:
-    explicit TestAudioMixer(std::vector<std::string> applications)
-        : applications_(std::move(applications))
+    class TestAudioMixer : public winaudiomixer::IAudioMixer
     {
-    }
+    public:
+        explicit TestAudioMixer(std::vector<std::string> applications)
+            : applications_(std::move(applications))
+        {
+        }
 
-    bool setApplicationVolume(const std::string&, float) override
-    {
-        return true;
-    }
+        bool setApplicationVolume(const std::string &, float) override
+        {
+            return true;
+        }
 
-    bool getApplicationVolume(const std::string&, float& outVolume) const override
-    {
-        outVolume = 0.0f;
-        return false;
-    }
+        std::vector<std::string> getAvailableApplications() const override
+        {
+            return applications_;
+        }
 
-    std::vector<std::string> getAvailableApplications() const override
-    {
-        return applications_;
-    }
-
-private:
-    std::vector<std::string> applications_;
-};
+    private:
+        std::vector<std::string> applications_;
+    };
 
 } // namespace
 
