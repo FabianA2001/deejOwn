@@ -8,7 +8,8 @@
 #include "audio/NullAudioMixer.h"
 #endif
 #include "util/Logger.h"
-
+#include <thread>
+#include <chrono>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -17,13 +18,15 @@
 
 int main()
 {
-    try {
+    try
+    {
         const winaudiomixer::Configuration config = winaudiomixer::ConfigParser::parseFile("/Users/fabian/Programmieren/deejOwn/WinAudioMixer/config.ini");
         winaudiomixer::Logger::info("Configuration loaded");
 
         winaudiomixer::SerialReader serialReader;
         serialReader.setExpectedValues(config.sliderCount);
-        if (!serialReader.open(config.serialPort, config.baudRate)) {
+        if (!serialReader.open(config.serialPort, config.baudRate))
+        {
             winaudiomixer::Logger::error("Could not open serial port");
             return 1;
         }
@@ -32,7 +35,8 @@ int main()
         winaudiomixer::SliderController controller(config.sliderCount);
         controller.setDeadZone(config.deadZone);
 
-        for (const auto& [sliderIndex, programs] : config.sliderAssignments) {
+        for (const auto &[sliderIndex, programs] : config.sliderAssignments)
+        {
             controller.setMapping(sliderIndex, programs);
         }
 
@@ -43,21 +47,34 @@ int main()
         winaudiomixer::Logger::info("Using Null Audio Mixer (not on Windows)");
         winaudiomixer::NullAudioMixer audioMixer;
 #endif
-
-        while (true) {
+        int readcounter = 0;
+        while (true)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            readcounter++;
             std::vector<int> rawValues;
-            if (!serialReader.readValues(rawValues)) {
+            if (!serialReader.readValues(rawValues))
+            {
+                winaudiomixer::Logger::warning("rawValues is empty");
                 continue;
             }
 
             const std::vector<int> filteredValues = filter.process(rawValues);
+
+            if (readcounter < 10)
+                continue;
+            readcounter = 0;
+
             const std::vector<winaudiomixer::ApplicationVolumeChange> changes = controller.process(filteredValues, audioMixer);
 
-            for (const auto& change : changes) {
+            for (const auto &change : changes)
+            {
                 audioMixer.setApplicationVolume(change.application, change.volume);
             }
         }
-    } catch (const std::exception& ex) {
+    }
+    catch (const std::exception &ex)
+    {
         winaudiomixer::Logger::error(ex.what());
         return 1;
     }
