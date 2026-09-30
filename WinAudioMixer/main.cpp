@@ -1,595 +1,357 @@
-#include <windows.h>
-#include <commctrl.h>
+// Cross-platform serial reader for Arduino-style line based output.
 
+#include <chrono>
+#include <cctype>
+#include <cstdlib>
+#include <exception>
+#include <iostream>
 #include <string>
-#include <vector>
-#include <memory>
 
-#include "AudioManager.h"
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/select.h>
+#include <termios.h>
+#include <unistd.h>
+#endif
 
-#pragma comment(lib, "comctl32.lib")
-
-// ------------------------------------------------------------
-// IDs
-// ------------------------------------------------------------
-
-constexpr int IDC_REFRESH = 1001;
-constexpr int IDC_SCROLL = 1002;
-
-constexpr int IDC_SLIDER_BASE = 2000;
-constexpr int IDC_MUTE_BASE = 3000;
-
-constexpr UINT TIMER_REFRESH = 1;
-
-// ------------------------------------------------------------
-// Globale Variablen
-// ------------------------------------------------------------
-
-AudioManager g_audioManager;
-
-std::vector<AudioSession> g_sessions;
-
-HWND g_mainWindow = nullptr;
-HWND g_refreshButton = nullptr;
-
-bool g_updatingUI = false;
-
-// ------------------------------------------------------------
-// Hilfsfunktionen
-// ------------------------------------------------------------
-
-std::wstring BuildSessionName(
-    const AudioSession &session)
+namespace
 {
-    if (!session.displayName.empty())
-    {
-        if (session.displayName != session.processName)
-        {
-            return session.displayName +
-                   L" (" +
-                   session.processName +
-                   L")";
-        }
-
-        return session.displayName;
-    }
-
-    return session.processName;
+std::string defaultPort()
+{
+#ifdef _WIN32
+	return "COM3";
+#else
+	return "/dev/cu.usbmodem1301";
+#endif
 }
 
-void DestroySessionControls()
+int defaultBaud()
 {
-    for (auto &session : g_sessions)
-    {
-        if (session.label)
-            DestroyWindow(session.label);
-
-        if (session.slider)
-            DestroyWindow(session.slider);
-
-        if (session.muteButton)
-            DestroyWindow(session.muteButton);
-
-        if (session.volume)
-        {
-            session.volume->Release();
-            session.volume = nullptr;
-        }
-    }
-
-    g_sessions.clear();
+	return 9600;
 }
 
-// ------------------------------------------------------------
-// UI aktualisieren
-// ------------------------------------------------------------
-
-void RefreshSessions()
+bool parseInt(const std::string &text, int &value)
 {
-    if (!g_mainWindow)
-        return;
+	try
+	{
+		size_t consumed = 0;
+		const int parsed = std::stoi(text, &consumed);
+		if (consumed != text.size())
+			return false;
 
-    g_updatingUI = true;
-
-    DestroySessionControls();
-
-    g_sessions = g_audioManager.GetSessions();
-
-    int y = 70;
-
-    const int labelWidth = 240;
-    const int sliderWidth = 280;
-    const int buttonWidth = 90;
-
-    for (size_t i = 0; i < g_sessions.size(); ++i)
-    {
-        auto &session = g_sessions[i];
-
-        int sliderId =
-            IDC_SLIDER_BASE + static_cast<int>(i);
-
-        int muteId =
-            IDC_MUTE_BASE + static_cast<int>(i);
-
-        // ----------------------------------------------------
-        // Name
-        // ----------------------------------------------------
-
-        std::wstring name = BuildSessionName(session);
-
-        session.label = CreateWindowExW(
-            0,
-            L"STATIC",
-            name.c_str(),
-            WS_CHILD | WS_VISIBLE,
-            20,
-            y,
-            labelWidth,
-            30,
-            g_mainWindow,
-            nullptr,
-            GetModuleHandleW(nullptr),
-            nullptr);
-
-        // ----------------------------------------------------
-        // Slider
-        // ----------------------------------------------------
-
-        session.slider = CreateWindowExW(
-            0,
-            TRACKBAR_CLASSW,
-            L"",
-            WS_CHILD |
-                WS_VISIBLE |
-                TBS_AUTOTICKS |
-                TBS_HORZ,
-            260,
-            y - 5,
-            sliderWidth,
-            40,
-            g_mainWindow,
-            reinterpret_cast<HMENU>(
-                static_cast<INT_PTR>(sliderId)),
-            GetModuleHandleW(nullptr),
-            nullptr);
-
-        SendMessageW(
-            session.slider,
-            TBM_SETRANGE,
-            TRUE,
-            MAKELONG(0, 100));
-
-        SendMessageW(
-            session.slider,
-            TBM_SETTICFREQ,
-            10,
-            0);
-
-        float volume = 0.0f;
-
-        if (g_audioManager.GetVolume(
-                session.volume,
-                volume))
-        {
-            int percent =
-                static_cast<int>(volume * 100.0f + 0.5f);
-
-            SendMessageW(
-                session.slider,
-                TBM_SETPOS,
-                TRUE,
-                percent);
-        }
-
-        // ----------------------------------------------------
-        // Mute Button
-        // ----------------------------------------------------
-
-        session.muteButton = CreateWindowExW(
-            0,
-            L"BUTTON",
-            L"Mute",
-            WS_CHILD |
-                WS_VISIBLE |
-                BS_PUSHBUTTON,
-            560,
-            y,
-            buttonWidth,
-            28,
-            g_mainWindow,
-            reinterpret_cast<HMENU>(
-                static_cast<INT_PTR>(muteId)),
-            GetModuleHandleW(nullptr),
-            nullptr);
-
-        bool muted = false;
-
-        if (g_audioManager.GetMute(
-                session.volume,
-                muted))
-        {
-            SetWindowTextW(
-                session.muteButton,
-                muted ? L"Unmute" : L"Mute");
-        }
-
-        y += 55;
-    }
-
-    g_updatingUI = false;
-
-    InvalidateRect(
-        g_mainWindow,
-        nullptr,
-        TRUE);
+		value = parsed;
+		return true;
+	}
+	catch (const std::exception &)
+	{
+		return false;
+	}
 }
 
-// ------------------------------------------------------------
-// Fenstergröße
-// ------------------------------------------------------------
-
-void UpdateWindowSize()
+void printUsage(const char *programName)
 {
-    RECT rect;
-
-    GetClientRect(
-        g_mainWindow,
-        &rect);
-
-    int width = rect.right - rect.left;
-    int height = rect.bottom - rect.top;
-
-    if (height < 100)
-        height = 100;
-
-    // Keine spezielle Größenberechnung notwendig.
-    // Die Controls werden bei Refresh neu positioniert.
-
-    (void)width;
-    (void)height;
+	std::cout << "Usage: " << programName << " [port] [baud]\n";
+	std::cout << "Example macOS: " << programName << " /dev/cu.usbmodem1301 9600\n";
+	std::cout << "Example Windows: " << programName << " COM3 9600\n";
 }
 
-// ------------------------------------------------------------
-// Window Procedure
-// ------------------------------------------------------------
-
-LRESULT CALLBACK WindowProc(
-    HWND hwnd,
-    UINT message,
-    WPARAM wParam,
-    LPARAM lParam)
+class SerialPort
 {
-    switch (message)
-    {
-    case WM_CREATE:
-    {
-        g_mainWindow = hwnd;
+public:
+	~SerialPort()
+	{
+		close();
+	}
 
-        // ----------------------------------------------------
-        // Refresh Button
-        // ----------------------------------------------------
+	bool open(const std::string &portName, int baudRate, std::string &errorMessage)
+	{
+#ifdef _WIN32
+		std::wstring widePort = toWidePortName(portName);
+		m_handle = CreateFileW(
+			widePort.c_str(),
+			GENERIC_READ,
+			0,
+			nullptr,
+			OPEN_EXISTING,
+			0,
+			nullptr);
 
-        g_refreshButton = CreateWindowExW(
-            0,
-            L"BUTTON",
-            L"Refresh",
-            WS_CHILD |
-                WS_VISIBLE |
-                BS_PUSHBUTTON,
-            20,
-            20,
-            100,
-            30,
-            hwnd,
-            reinterpret_cast<HMENU>(IDC_REFRESH),
-            GetModuleHandleW(nullptr),
-            nullptr);
+		if (m_handle == INVALID_HANDLE_VALUE)
+		{
+			errorMessage = "Could not open serial port.";
+			return false;
+		}
 
-        // ----------------------------------------------------
-        // Timer
-        // ----------------------------------------------------
+		DCB dcb{};
+		dcb.DCBlength = sizeof(dcb);
 
-        SetTimer(
-            hwnd,
-            TIMER_REFRESH,
-            1500,
-            nullptr);
+		if (!GetCommState(m_handle, &dcb))
+		{
+			errorMessage = "Could not read serial port settings.";
+			close();
+			return false;
+		}
 
-        RefreshSessions();
+		dcb.BaudRate = static_cast<DWORD>(baudRate);
+		dcb.ByteSize = 8;
+		dcb.Parity = NOPARITY;
+		dcb.StopBits = ONESTOPBIT;
+		dcb.fBinary = TRUE;
+		dcb.fParity = FALSE;
+		dcb.fOutxCtsFlow = FALSE;
+		dcb.fOutxDsrFlow = FALSE;
+		dcb.fDtrControl = DTR_CONTROL_ENABLE;
+		dcb.fDsrSensitivity = FALSE;
+		dcb.fTXContinueOnXoff = FALSE;
+		dcb.fOutX = FALSE;
+		dcb.fInX = FALSE;
+		dcb.fErrorChar = FALSE;
+		dcb.fNull = FALSE;
+		dcb.fRtsControl = RTS_CONTROL_ENABLE;
 
-        return 0;
-    }
+		if (!SetCommState(m_handle, &dcb))
+		{
+			errorMessage = "Could not configure serial port.";
+			close();
+			return false;
+		}
 
-    case WM_COMMAND:
-    {
-        int id = LOWORD(wParam);
+		COMMTIMEOUTS timeouts{};
+		timeouts.ReadIntervalTimeout = 50;
+		timeouts.ReadTotalTimeoutConstant = 50;
+		timeouts.ReadTotalTimeoutMultiplier = 10;
+		timeouts.WriteTotalTimeoutConstant = 50;
+		timeouts.WriteTotalTimeoutMultiplier = 10;
 
-        // Refresh
-        if (id == IDC_REFRESH)
-        {
-            RefreshSessions();
-            return 0;
-        }
+		if (!SetCommTimeouts(m_handle, &timeouts))
+		{
+			errorMessage = "Could not set serial timeouts.";
+			close();
+			return false;
+		}
 
-        // Mute Buttons
-        if (id >= IDC_MUTE_BASE &&
-            id < IDC_MUTE_BASE + 1000)
-        {
-            int index =
-                id - IDC_MUTE_BASE;
+		PurgeComm(m_handle, PURGE_RXCLEAR | PURGE_RXABORT | PURGE_TXCLEAR | PURGE_TXABORT);
+		return true;
+#else
+		m_fd = ::open(portName.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
 
-            if (index >= 0 &&
-                index < static_cast<int>(g_sessions.size()))
-            {
-                auto &session =
-                    g_sessions[index];
+		if (m_fd < 0)
+		{
+			errorMessage = "Could not open serial port.";
+			return false;
+		}
 
-                bool muted = false;
+		termios tty{};
+		if (tcgetattr(m_fd, &tty) != 0)
+		{
+			errorMessage = "Could not read serial port settings.";
+			close();
+			return false;
+		}
 
-                if (g_audioManager.GetMute(
-                        session.volume,
-                        muted))
-                {
-                    g_audioManager.SetMute(
-                        session.volume,
-                        !muted);
+		cfmakeraw(&tty);
+		tty.c_cflag |= (CLOCAL | CREAD);
+		tty.c_cflag &= ~CSTOPB;
+		tty.c_cflag &= ~CRTSCTS;
+		tty.c_cflag &= ~PARENB;
+		tty.c_cflag &= ~CSIZE;
+		tty.c_cflag |= CS8;
 
-                    SetWindowTextW(
-                        session.muteButton,
-                        !muted
-                            ? L"Unmute"
-                            : L"Mute");
-                }
-            }
+		if (!setSpeed(tty, baudRate))
+		{
+			errorMessage = "Unsupported baud rate on this platform.";
+			close();
+			return false;
+		}
 
-            return 0;
-        }
+		tty.c_cc[VMIN] = 0;
+		tty.c_cc[VTIME] = 1;
 
-        break;
-    }
+		if (tcsetattr(m_fd, TCSANOW, &tty) != 0)
+		{
+			errorMessage = "Could not configure serial port.";
+			close();
+			return false;
+		}
 
-    case WM_HSCROLL:
-    {
-        HWND slider =
-            reinterpret_cast<HWND>(lParam);
+		tcflush(m_fd, TCIOFLUSH);
+		return true;
+#endif
+	}
 
-        if (!slider || g_updatingUI)
-            break;
+	bool readByte(char &byte)
+	{
+#ifdef _WIN32
+		DWORD bytesRead = 0;
+		if (!ReadFile(m_handle, &byte, 1, &bytesRead, nullptr))
+			return false;
+		return bytesRead == 1;
+#else
+		fd_set readSet;
+		FD_ZERO(&readSet);
+		FD_SET(m_fd, &readSet);
 
-        // Herausfinden, welcher Slider verändert wurde
-        for (size_t i = 0;
-             i < g_sessions.size();
-             ++i)
-        {
-            if (g_sessions[i].slider == slider)
-            {
-                int position =
-                    static_cast<int>(
-                        SendMessageW(
-                            slider,
-                            TBM_GETPOS,
-                            0,
-                            0));
+		timeval timeout{};
+		timeout.tv_sec = 0;
+		timeout.tv_usec = 100000;
 
-                float volume =
-                    static_cast<float>(position) / 100.0f;
+		const int ready = select(m_fd + 1, &readSet, nullptr, nullptr, &timeout);
+		if (ready <= 0)
+			return false;
 
-                g_audioManager.SetVolume(
-                    g_sessions[i].volume,
-                    volume);
+		const ssize_t bytesRead = ::read(m_fd, &byte, 1);
+		return bytesRead == 1;
+#endif
+	}
 
-                break;
-            }
-        }
+	void close()
+	{
+#ifdef _WIN32
+		if (m_handle != INVALID_HANDLE_VALUE)
+		{
+			CloseHandle(m_handle);
+			m_handle = INVALID_HANDLE_VALUE;
+		}
+#else
+		if (m_fd >= 0)
+		{
+			::close(m_fd);
+			m_fd = -1;
+		}
+#endif
+	}
 
-        return 0;
-    }
+private:
+#ifdef _WIN32
+	static std::wstring toWidePortName(const std::string &portName)
+	{
+		const std::wstring wideName(portName.begin(), portName.end());
+		if (wideName.rfind(L"\\\\.\\", 0) == 0)
+			return wideName;
 
-    case WM_TIMER:
-    {
-        if (wParam == TIMER_REFRESH)
-        {
-            // Neue Programme können Audio-Sessions
-            // geöffnet haben.
-            //
-            // Für die erste Version aktualisieren
-            // wir einfach regelmäßig die Liste.
+		if (wideName.rfind(L"COM", 0) == 0 || wideName.rfind(L"com", 0) == 0)
+			return L"\\\\.\\" + wideName;
 
-            RefreshSessions();
-        }
+		return wideName;
+	}
 
-        return 0;
-    }
+	HANDLE m_handle = INVALID_HANDLE_VALUE;
+#else
+	static bool setSpeed(termios &tty, int baudRate)
+	{
+		speed_t speed = B0;
 
-    case WM_SIZE:
-    {
-        UpdateWindowSize();
-        return 0;
-    }
+		switch (baudRate)
+		{
+		case 1200: speed = B1200; break;
+		case 2400: speed = B2400; break;
+		case 4800: speed = B4800; break;
+		case 9600: speed = B9600; break;
+		case 19200: speed = B19200; break;
+		case 38400: speed = B38400; break;
+		case 57600: speed = B57600; break;
+		case 115200: speed = B115200; break;
+		case 230400: speed = B230400; break;
+		default: return false;
+		}
 
-    case WM_DESTROY:
-    {
-        KillTimer(
-            hwnd,
-            TIMER_REFRESH);
+		return cfsetispeed(&tty, speed) == 0 && cfsetospeed(&tty, speed) == 0;
+	}
 
-        DestroySessionControls();
+	int m_fd = -1;
+#endif
+};
 
-        PostQuitMessage(0);
+void handleLine(const std::string &line)
+{
+	if (line.empty())
+		return;
 
-        return 0;
-    }
-    }
+	std::cout << "Arduino:";
 
-    return DefWindowProcW(
-        hwnd,
-        message,
-        wParam,
-        lParam);
+	size_t start = 0;
+	int index = 0;
+	while (start <= line.size())
+	{
+		const size_t separator = line.find('|', start);
+		const std::string token = line.substr(start, separator == std::string::npos ? std::string::npos : separator - start);
+
+		if (!token.empty())
+		{
+			char *end = nullptr;
+			const long value = std::strtol(token.c_str(), &end, 10);
+			if (end != token.c_str() && *end == '\0')
+			{
+				std::cout << " [" << index << "]=" << value;
+			}
+			else
+			{
+				std::cout << " [" << index << "]=" << token;
+			}
+		}
+
+		if (separator == std::string::npos)
+			break;
+
+		start = separator + 1;
+		++index;
+	}
+
+	std::cout << std::endl;
 }
+} // namespace
 
-// ------------------------------------------------------------
-// WinMain
-// ------------------------------------------------------------
-
-int WINAPI wWinMain(
-    HINSTANCE hInstance,
-    HINSTANCE,
-    PWSTR,
-    int nCmdShow)
+int main(int argc, char *argv[])
 {
-    // --------------------------------------------------------
-    // COM initialisieren
-    // --------------------------------------------------------
+	const std::string portName = argc > 1 ? argv[1] : defaultPort();
 
-    HRESULT hr = CoInitializeEx(
-        nullptr,
-        COINIT_MULTITHREADED);
+	int baudRate = defaultBaud();
+	if (argc > 2 && !parseInt(argv[2], baudRate))
+	{
+		std::cerr << "Ungultige Baudrate: " << argv[2] << std::endl;
+		printUsage(argv[0]);
+		return 1;
+	}
 
-    if (FAILED(hr))
-    {
-        MessageBoxW(
-            nullptr,
-            L"COM konnte nicht initialisiert werden.",
-            L"Fehler",
-            MB_ICONERROR);
+	if (argc == 1)
+	{
+		std::cout << "Kein Port angegeben, verwende Standard: " << portName << std::endl;
+	}
 
-        return 1;
-    }
+	SerialPort serial;
+	std::string errorMessage;
 
-    // --------------------------------------------------------
-    // Common Controls
-    // --------------------------------------------------------
+	if (!serial.open(portName, baudRate, errorMessage))
+	{
+		std::cerr << errorMessage << " Port: " << portName << " Baud: " << baudRate << std::endl;
+		return 1;
+	}
 
-    INITCOMMONCONTROLSEX icc{};
+	std::cout << "Lese Serial-Daten von " << portName << " mit " << baudRate << " Baud. Beenden mit Strg+C." << std::endl;
 
-    icc.dwSize =
-        sizeof(INITCOMMONCONTROLSEX);
+	std::string currentLine;
+	char byte = '\0';
 
-    icc.dwICC =
-        ICC_BAR_CLASSES;
+	while (true)
+	{
+		if (!serial.readByte(byte))
+			continue;
 
-    InitCommonControlsEx(&icc);
+		if (byte == '\r')
+			continue;
 
-    // --------------------------------------------------------
-    // Audio Manager
-    // --------------------------------------------------------
+		if (byte == '\n')
+		{
+			handleLine(currentLine);
+			currentLine.clear();
+			continue;
+		}
 
-    if (!g_audioManager.Initialize())
-    {
-        MessageBoxW(
-            nullptr,
-            L"Die Windows Audio API konnte nicht initialisiert werden.",
-            L"Fehler",
-            MB_ICONERROR);
+		currentLine.push_back(byte);
+	}
 
-        CoUninitialize();
-
-        return 1;
-    }
-
-    // --------------------------------------------------------
-    // Window Class
-    // --------------------------------------------------------
-
-    const wchar_t CLASS_NAME[] =
-        L"WinAudioMixerWindow";
-
-    WNDCLASSW wc{};
-
-    wc.lpfnWndProc =
-        WindowProc;
-
-    wc.hInstance =
-        hInstance;
-
-    wc.lpszClassName =
-        CLASS_NAME;
-
-    wc.hCursor =
-        LoadCursorW(
-            nullptr,
-            IDC_ARROW);
-
-    wc.hbrBackground =
-        reinterpret_cast<HBRUSH>(
-            COLOR_WINDOW + 1);
-
-    if (!RegisterClassW(&wc))
-    {
-        MessageBoxW(
-            nullptr,
-            L"Fensterklasse konnte nicht registriert werden.",
-            L"Fehler",
-            MB_ICONERROR);
-
-        g_audioManager.Shutdown();
-        CoUninitialize();
-
-        return 1;
-    }
-
-    // --------------------------------------------------------
-    // Fenster
-    // --------------------------------------------------------
-
-    HWND hwnd = CreateWindowExW(
-        0,
-        CLASS_NAME,
-        L"Windows Audio Mixer",
-        WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        720,
-        600,
-        nullptr,
-        nullptr,
-        hInstance,
-        nullptr);
-
-    if (!hwnd)
-    {
-        MessageBoxW(
-            nullptr,
-            L"Fenster konnte nicht erstellt werden.",
-            L"Fehler",
-            MB_ICONERROR);
-
-        g_audioManager.Shutdown();
-        CoUninitialize();
-
-        return 1;
-    }
-
-    ShowWindow(
-        hwnd,
-        nCmdShow);
-
-    UpdateWindow(hwnd);
-
-    // --------------------------------------------------------
-    // Message Loop
-    // --------------------------------------------------------
-
-    MSG msg{};
-
-    while (GetMessageW(
-        &msg,
-        nullptr,
-        0,
-        0))
-    {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-    }
-
-    // --------------------------------------------------------
-    // Cleanup
-    // --------------------------------------------------------
-
-    g_audioManager.Shutdown();
-
-    CoUninitialize();
-
-    return static_cast<int>(msg.wParam);
+	return 0;
 }

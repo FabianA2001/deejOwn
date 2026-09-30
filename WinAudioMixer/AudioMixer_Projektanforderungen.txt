@@ -1,0 +1,763 @@
+Projektanforderungen: Arduino Audio Mixer Controller
+======================================================
+
+Ziel
+----
+Entwickle ein C++-Programm für Windows, das bis zu 5 Werte von einem
+Arduino über eine serielle Schnittstelle liest und abhängig von diesen
+Werten die Lautstärke bestimmter Windows-Programme steuert.
+
+Die Konfiguration soll vollständig aus einer Konfigurationsdatei geladen
+werden. Es sollen Dead Zones und eine Filterung der Arduino-Werte unterstützt
+werden.
+
+
+1. Allgemeine Anforderungen
+----------------------------
+
+- Programmiersprache: C++
+- Zielplattform: Windows
+- Kommunikation mit dem Arduino über eine serielle Schnittstelle.
+- Es können maximal 5 Slider/Werte verarbeitet werden.
+- Jeder Slider liefert einen numerischen Wert.
+- Die Rohwerte des Arduino sollen gefiltert werden, um Messrauschen und
+  einzelne Ausreißer zu reduzieren.
+- Kleine Änderungen innerhalb einer konfigurierten Dead Zone dürfen keine
+  Änderung der Windows-Lautstärke auslösen.
+- Die Zuordnung von Slidern zu Programmen wird ausschließlich über eine
+  Konfigurationsdatei festgelegt.
+- Das Programm soll modular aufgebaut sein.
+- Windows-spezifische Audio-Funktionalität soll von der allgemeinen
+  Programm-Logik getrennt sein.
+- Fehler sollen verständlich gemeldet werden.
+- Das Programm soll sauber beendet werden können.
+
+
+2. Architektur
+--------------
+
+Die Anwendung soll mindestens aus folgenden Komponenten bestehen:
+
+    Configuration
+        |
+        v
+    SerialReader
+        |
+        v
+    ValueFilter
+        |
+        v
+    SliderMapping / Controller
+        |
+        v
+    AudioMixer
+
+Zusätzlich:
+
+    ConfigParser
+    Main/Application
+
+
+3. Configuration
+----------------
+
+Die gesamte Konfiguration wird aus einer Datei gelesen.
+z.B.:
+
+    config.yaml
+
+Die Konfiguration soll mindestens folgende Informationen enthalten:
+
+- Serial-Port
+- Baudrate
+- Anzahl der erwarteten Slider/Werte
+- Filtertyp
+- Filterparameter
+- Dead Zone
+- Slider-zu-Programm-Zuordnung
+- Verhalten für nicht explizit zugeordnete Programme/Slider
+
+
+5. Slider-Zuordnung
+-------------------
+
+Jeder Slider kann einem oder mehreren Programmen zugeordnet werden.
+
+Beispiele:
+
+    Slider 0 -> Spotify
+    Slider 1 -> Chrome
+    Slider 2 -> Discord, Teams
+
+Zusätzlich soll die Konfiguration ermöglichen:
+
+    Slider -> alle Programme, die nicht bereits einem anderen Slider
+              zugeordnet wurden
+
+Dafür kann z.B. der spezielle Wert
+
+    programs=unassigned
+
+verwendet werden.
+
+Die genaue Semantik soll im Code dokumentiert werden.
+
+
+6. SerialReader
+---------------
+
+Der SerialReader ist ausschließlich für die Kommunikation mit dem Arduino
+verantwortlich.
+
+Aufgaben:
+
+- Öffnen des konfigurierten COM-Ports.
+- Konfigurieren der Baudrate.
+- Lesen der seriellen Daten.
+- Erkennen vollständiger Datensätze.
+- Umwandeln der empfangenen Daten in numerische Sliderwerte.
+- Überprüfung der Daten auf Gültigkeit.
+- Erkennen von Kommunikationsfehlern.
+- Sauberes Schließen des Ports.
+
+Der Serial-Port soll beim Programmstart geöffnet und während der Laufzeit
+offen gehalten werden. Ein erneutes Öffnen und Schließen pro Lesevorgang ist
+nicht vorgesehen. Geschlossen wird der Port nur beim sauberen Programmende
+oder wenn ein schwerer Kommunikationsfehler eine Neuverbindung erforderlich
+macht.
+
+Der SerialReader soll keine Audio-Logik enthalten.
+
+
+7. Arduino-Datenformat
+----------------------
+
+Das Datenformat soll eindeutig definiert sein.
+
+Bevorzugtes Format:
+
+    value0|value1|value2|value3|value4\n
+
+Beispiel:
+
+    512|800|100|1023|450
+
+Es müssen genau so viele Werte akzeptiert werden, wie in der Konfiguration
+angegeben sind.
+
+Ungültige Datensätze dürfen nicht an die nächste Verarbeitungsebene
+weitergegeben werden.
+
+Beispiele für ungültige Daten:
+
+    512,abc,100,1023,450
+    512,800
+    512,800,100,1023,450,123
+    hello
+
+
+8. ValueFilter
+--------------
+
+Der ValueFilter verarbeitet die vom SerialReader gelieferten Rohwerte.
+
+Standardmäßig soll ein Medianfilter implementiert werden.
+
+Beispiel bei window_size=5:
+
+    500
+    503
+    499
+    900
+    501
+
+Sortiert:
+
+    499
+    500
+    501
+    503
+    900
+
+Median:
+
+    501
+
+Dadurch werden einzelne Ausreißer reduziert.
+
+Der Filter muss pro Slider einen eigenen Werteverlauf speichern.
+
+Beispiel:
+
+    Slider 0 -> eigener Filterverlauf
+    Slider 1 -> eigener Filterverlauf
+    ...
+    Slider 4 -> eigener Filterverlauf
+
+
+9. Erweiterbarkeit des Filters
+------------------------------
+
+Der Filter soll über ein Interface abstrahiert werden.
+
+Beispielsweise:
+
+    IValueFilter
+
+Mögliche Implementierungen:
+
+    MedianFilter
+    MovingAverageFilter
+    ExponentialMovingAverageFilter
+
+Zunächst muss mindestens MedianFilter implementiert werden.
+
+Der Filtertyp wird über die Konfigurationsdatei ausgewählt.
+
+Beispiel:
+
+    [Filter]
+    type=median
+    window_size=5
+
+
+10. Dead Zone
+-------------
+
+Jeder Slider soll eine eigene Dead Zone besitzen.
+
+Die Dead Zone verhindert, dass kleine Änderungen ständig die
+Windows-Lautstärke verändern.
+
+Beispiel:
+
+    deadzone=5
+
+Wenn der zuletzt angewendete Wert 500 war, sollen Werte im Bereich
+
+    495 bis 505
+
+keine neue Lautstärkeeinstellung auslösen.
+
+Erst wenn der Wert außerhalb dieses Bereichs liegt, soll eine Änderung
+angewendet werden.
+
+Die genaue Berechnung soll zentral implementiert werden und nicht im
+SerialReader erfolgen.
+
+
+11. Mapping und Controller
+--------------------------
+
+Eine eigene Komponente soll die gefilterten Sliderwerte in
+Lautstärkeänderungen für Programme umwandeln.
+
+Beispiel:
+
+    Sliderwert: 0..1023
+    Lautstärke: 0..100 %
+
+Daraus:
+
+    0    -> 0 %
+    512  -> ca. 50 %
+    1023 -> 100 %
+
+Die Umrechnung soll unabhängig vom AudioMixer erfolgen.
+
+
+12. AudioMixer
+--------------
+
+Der AudioMixer ist ausschließlich für die Windows-Audio-Steuerung
+verantwortlich.
+
+Er soll eine Schnittstelle bereitstellen, beispielsweise:
+
+    setApplicationVolume(application, volume)
+
+und optional:
+
+    getApplicationVolume(application)
+
+Der AudioMixer soll:
+
+- Programme anhand ihres Namens/Prozessnamens finden.
+- Die Lautstärke des entsprechenden Audio-Endpunkts bzw. der
+  entsprechenden Audio-Session setzen.
+- Fehler melden, wenn ein Programm nicht gefunden wird.
+- Nicht bei jedem Loop-Durchlauf unnötig dieselbe Lautstärke setzen.
+
+Die konkrete Windows-Audio-Implementierung soll gekapselt sein.
+
+
+13. Trennung der Verantwortlichkeiten
+-------------------------------------
+
+Folgende Verantwortlichkeiten müssen getrennt bleiben:
+
+ConfigParser:
+    Liest und validiert die Konfigurationsdatei.
+
+Configuration:
+    Enthält die geladene Konfiguration.
+
+SerialReader:
+    Liest Daten vom Arduino.
+
+ValueFilter:
+    Filtert Messwerte.
+
+SliderMapping / Controller:
+    Ordnet Slider Programme zu und berechnet Lautstärkeänderungen.
+
+AudioMixer:
+    Verändert Windows-Lautstärken.
+
+Main/Application:
+    Erstellt die Komponenten und verbindet sie.
+    Enthält möglichst wenig Fachlogik.
+
+
+14. Main Loop
+-------------
+
+Der Main Loop soll ungefähr folgendem Ablauf entsprechen:
+
+    1. SerialReader liest einen Datensatz.
+    2. Datensatz wird auf Gültigkeit geprüft.
+    3. Rohwerte werden gefiltert.
+    4. Für jeden Slider wird geprüft, ob die Dead Zone überschritten wurde.
+    5. Für relevante Änderungen wird die Lautstärke berechnet.
+    6. Der AudioMixer setzt die entsprechenden Lautstärken.
+    7. Der nächste Datensatz wird gelesen.
+
+Pseudo-Code:
+
+    while (running)
+    {
+        rawValues = serialReader.read();
+
+        if (!rawValues.isValid())
+            continue;
+
+        filteredValues = valueFilter.process(rawValues);
+
+        changes = controller.process(filteredValues);
+
+        for (change : changes)
+        {
+            audioMixer.setApplicationVolume(
+                change.application,
+                change.volume
+            );
+        }
+    }
+
+
+15. Änderungsoptimierung
+------------------------
+
+Eine Lautstärke soll nur gesetzt werden, wenn sich der relevante Wert
+tatsächlich ausreichend geändert hat.
+
+Beispiel:
+
+    letzter angewendeter Sliderwert = 500
+    Dead Zone = 5
+
+Neue Werte:
+
+    501 -> keine Änderung
+    503 -> keine Änderung
+    505 -> keine Änderung
+    506 -> Änderung anwenden
+
+
+16. Verhalten beim Programmstart
+--------------------------------
+
+Beim Start soll:
+
+1. Konfiguration geladen werden.
+2. Konfiguration validiert werden.
+3. Serial-Port geöffnet werden.
+4. Audio-Komponente initialisiert werden.
+5. Filter initialisiert werden.
+6. Mapping überprüft werden.
+7. Main Loop gestartet werden.
+
+Während der Main Loop bleibt der Serial-Port offen. Ein reconnect oder ein
+erneutes Öffnen erfolgt nur bei Verbindungsverlust oder explizitem Neustart
+des SerialReaders.
+
+Wenn ein kritischer Fehler auftritt, soll das Programm mit einer
+verständlichen Fehlermeldung beendet werden.
+
+Beispiele:
+
+    Konfigurationsdatei nicht gefunden.
+    Ungültiger COM-Port.
+    Serial-Port konnte nicht geöffnet werden.
+    Ungültige Anzahl an Slidern.
+    Ungültige Filterkonfiguration.
+
+
+17. Logging
+-----------
+
+Das Programm soll einfache Logs ausgeben.
+
+Mindestens:
+
+    INFO
+    WARNING
+    ERROR
+
+Beispiele:
+
+    [INFO] Configuration loaded
+    [INFO] Opening serial port COM5
+    [INFO] Connected to Arduino
+    [WARNING] Invalid serial packet received
+    [WARNING] Application 'Spotify' not found
+    [ERROR] Could not open serial port
+
+
+18. Fehlerbehandlung
+--------------------
+
+Ein einzelner fehlerhafter Serial-Datensatz darf das Programm nicht
+beenden.
+
+Beispiel:
+
+    gültig
+    gültig
+    ungültig
+    gültig
+
+Der ungültige Datensatz wird verworfen und das Programm läuft weiter.
+
+Ein dauerhaft verlorener Serial-Port soll dagegen erkannt und verständlich
+gemeldet werden.
+
+
+19. Testbarkeit
+---------------
+
+Die Architektur soll Unit-Tests ermöglichen.
+
+Insbesondere sollen ohne echten Arduino und ohne Windows-Audio-System
+testbar sein:
+
+- ConfigParser
+- Konfigurationsvalidierung
+- MedianFilter
+- Dead-Zone-Logik
+- Sliderwert -> Lautstärke Mapping
+- Slider -> Programme Mapping
+
+Dafür sollen Interfaces verwendet werden, wo externe Abhängigkeiten
+bestehen.
+
+
+20. Empfohlene Projektstruktur
+------------------------------
+
+Eine mögliche Struktur:
+
+    src/
+    |
+    +-- main.cpp
+    |
+    +-- config/
+    |   +-- ConfigParser.h
+    |   +-- ConfigParser.cpp
+    |   +-- Configuration.h
+    |
+    +-- serial/
+    |   +-- ISerialReader.h
+    |   +-- SerialReader.h
+    |   +-- SerialReader.cpp
+    |
+    +-- filter/
+    |   +-- IValueFilter.h
+    |   +-- MedianFilter.h
+    |   +-- MedianFilter.cpp
+    |
+    +-- controller/
+    |   +-- SliderController.h
+    |   +-- SliderController.cpp
+    |
+    +-- audio/
+    |   +-- IAudioMixer.h
+    |   +-- WindowsAudioMixer.h
+    |   +-- WindowsAudioMixer.cpp
+    |
+    +-- util/
+        +-- Logger.h
+        +-- Logger.cpp
+
+    tests/
+    |
+    +-- MedianFilterTests.cpp
+    +-- DeadZoneTests.cpp
+    +-- ConfigParserTests.cpp
+    +-- MappingTests.cpp
+
+    config.ini
+
+    CMakeLists.txt
+
+
+21. Interfaces
+--------------
+
+Die konkreten Klassennamen dürfen angepasst werden, die Verantwortlichkeiten
+sollen jedoch erhalten bleiben.
+
+Beispiel:
+
+    class ISerialReader
+    {
+    public:
+        virtual ~ISerialReader() = default;
+
+        virtual bool open() = 0;
+        virtual bool readValues(std::vector<int>& values) = 0;
+        virtual void close() = 0;
+    };
+
+
+    class IValueFilter
+    {
+    public:
+        virtual ~IValueFilter() = default;
+
+        virtual std::vector<int> process(
+            const std::vector<int>& values) = 0;
+    };
+
+
+    class IAudioMixer
+    {
+    public:
+        virtual ~IAudioMixer() = default;
+
+        virtual bool setApplicationVolume(
+            const std::string& application,
+            float volume) = 0;
+    };
+
+
+22. Keine unnötige Kopplung
+----------------------------
+
+Folgende Abhängigkeiten sollen vermieden werden:
+
+SerialReader -> AudioMixer
+AudioMixer -> SerialReader
+ValueFilter -> AudioMixer
+ConfigParser -> AudioMixer
+
+Stattdessen soll die Main/Application-Schicht die Komponenten verbinden.
+
+
+24. Zukunftserweiterungen
+-------------------------
+
+Die Architektur soll spätere Erweiterungen ermöglichen, ohne den
+SerialReader oder AudioMixer komplett umzubauen.
+
+Mögliche spätere Funktionen:
+
+- Mehr als 5 Slider
+- Weitere Filter
+- Unterschiedliche Wertebereiche
+- Individuelle Minimum-/Maximum-Werte pro Slider
+- Lautstärke-Kurven
+- Mute-Funktion
+- Tastatur-/Hotkey-Steuerung
+- Mehrere Arduino-Geräte
+- Dynamisches Erkennen von Audio-Sessions
+- Profile für unterschiedliche Anwendungen
+- GUI
+
+
+25. Entwicklungsreihenfolge
+----------------------------
+
+Das Projekt soll schrittweise implementiert werden.
+
+Phase 1:
+    Projektstruktur und CMake einrichten.
+
+Phase 2:
+    Configuration und ConfigParser implementieren.
+
+Phase 3:
+    MedianFilter und Dead-Zone-Logik implementieren.
+
+Phase 4:
+    SerialReader implementieren.
+
+Phase 5:
+    SliderMapping / Controller implementieren.
+
+Phase 6:
+    WindowsAudioMixer implementieren.
+
+Phase 7:
+    Main Loop integrieren.
+
+Phase 8:
+    Logging und Fehlerbehandlung vervollständigen.
+
+Phase 9:
+    Unit-Tests erstellen.
+
+Phase 10:
+    Integrationstest mit echtem Arduino durchführen.
+
+
+26. Anforderungen an Copilot
+-----------------------------
+
+Implementiere das Projekt nicht als eine einzige große Klasse.
+
+Bevorzuge kleine Klassen mit klaren Verantwortlichkeiten.
+
+Verwende RAII, wo sinnvoll.
+
+Verwende const und const references, wo sinnvoll.
+
+Vermeide globale Variablen.
+
+Vermeide unnötige Singletons.
+
+Verwende std::vector, std::string, std::optional und andere geeignete
+Standardbibliothekskomponenten.
+
+Dokumentiere öffentliche Klassen und Methoden kurz.
+
+Behandle Fehler explizit.
+
+Windows-spezifischen Code ausschließlich in der Audio- bzw.
+Plattformimplementierung kapseln.
+
+Schreibe den Code so, dass die Kernlogik ohne echte Hardware getestet
+werden kann.
+
+Erstelle zunächst die Architektur und die Interfaces und implementiere
+anschließend die einzelnen Komponenten.
+
+Nach jeder größeren Komponente soll der Code kompilierbar sein.
+
+Keine Funktionalität nur als Stub einbauen, wenn sie für den aktuellen
+Implementierungsschritt bereits benötigt wird.
+
+
+27. Wichtiges Verhalten bei mehreren Programmen
+------------------------------------------------
+
+Wenn ein Slider mehreren Programmen zugeordnet ist, soll derselbe
+berechnete Lautstärkewert auf alle diese Programme angewendet werden.
+
+Beispiel:
+
+    Slider 2 = 750
+    programs = discord,teams
+
+Ergebnis:
+
+    Discord -> berechnete Lautstärke
+    Teams   -> berechnete Lautstärke
+
+
+Wenn ein Programm mehreren Slidern zugeordnet wird, muss eine eindeutige
+Regel verwendet werden.
+
+Empfohlene erste Version:
+
+    Ein Programm darf nur genau einem Slider zugeordnet werden.
+
+Wenn eine Konfiguration dagegen verstößt, soll der ConfigParser einen
+Fehler melden.
+
+Die spätere Unterstützung mehrerer Slider pro Programm kann als
+Erweiterung implementiert werden.
+
+
+28. Wichtiges Verhalten für "unassigned"
+----------------------------------------
+
+Wenn ein Slider
+
+    programs=unassigned
+
+besitzt, soll er alle Programme steuern, die keinem expliziten Slider
+zugeordnet sind.
+
+Explizite Zuordnungen haben Vorrang.
+
+Beispiel:
+
+    Slider0 -> Spotify
+    Slider1 -> Discord
+    Slider2 -> unassigned
+
+Wenn Windows folgende Programme mit Audio-Sessions hat:
+
+    Spotify
+    Discord
+    Chrome
+    Teams
+
+dann steuert Slider2:
+
+    Chrome
+    Teams
+
+aber nicht:
+
+    Spotify
+    Discord
+
+
+29. Ergebnis
+------------
+
+Das fertige Programm soll eine klare Verarbeitungskette besitzen:
+
+    Konfigurationsdatei
+           |
+           v
+    Configuration
+           |
+           v
+    SerialReader
+           |
+           v
+    Raw Slider Values
+           |
+           v
+    ValueFilter
+           |
+           v
+    Gefilterte Slider Values
+           |
+           v
+    Dead Zone / Controller
+           |
+           v
+    Lautstärkeänderungen
+           |
+           v
+    AudioMixer
+           |
+           v
+    Windows Audio Sessions
+
+Die Kernlogik soll unabhängig von Windows-Audio und der tatsächlichen
+seriellen Hardware testbar sein.

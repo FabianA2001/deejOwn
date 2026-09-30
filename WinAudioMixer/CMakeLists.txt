@@ -8,23 +8,23 @@ project(WinAudioMixer
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_executable(WinAudioMixer WIN32
+add_executable(WinAudioMixer
     main.cpp
-    AudioManager.cpp
-    AudioManager.h
 )
 
 target_compile_definitions(WinAudioMixer PRIVATE
-    UNICODE
-    _UNICODE
-    WIN32_LEAN_AND_MEAN
-    NOMINMAX
+    $<$<PLATFORM_ID:Windows>:UNICODE>
+    $<$<PLATFORM_ID:Windows>:_UNICODE>
+    $<$<PLATFORM_ID:Windows>:WIN32_LEAN_AND_MEAN>
+    $<$<PLATFORM_ID:Windows>:NOMINMAX>
 )
 
-target_link_libraries(WinAudioMixer PRIVATE
-    ole32
-    uuid
-    user32
-    gdi32
-    comctl32
-)
+if (WIN32)
+    target_link_libraries(WinAudioMixer PRIVATE
+        ole32
+        uuid
+        user32
+        gdi32
+        comctl32
+    )
+endif()
