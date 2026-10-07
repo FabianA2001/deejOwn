@@ -53,7 +53,7 @@ int main()
         int readcounter = 0;
         while (true)
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            //std::this_thread::sleep_for(std::chrono::milliseconds(5));
             readcounter++;
             std::vector<int> rawValues;
             if (!serialReader.readValues(rawValues))
