@@ -10,7 +10,7 @@ Die Zuordnung und Verarbeitung der Slider wird über eine Konfigurationsdatei fe
 
 ## Inspiration
 
-Die grundlegende Idee für den hardwarebasierten Audio-Mixer, das Icon sowie die verwendete Arduino-Hardware orientieren sich am Open-Source-Projekt [deej](https://github.com/FabianA2001/deej).
+Die grundlegende Idee für den hardwarebasierten Audio-Mixer, das Icon sowie die verwendete Arduino-Hardware orientieren sich am Open-Source-Projekt [deej](https://github.com/omriharel/deej).
 
 Die Umsetzung der PC-seitigen Verarbeitung erfolgt über die eigene Anwendung **WinAudioMixer**. Ein wesentlicher Teil des Quellcodes wurde mithilfe von KI generiert. Die einzelnen Komponenten wurden anschließend integriert, angepasst und auf ihre Funktionalität getestet.
 
