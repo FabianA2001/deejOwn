@@ -10,9 +10,9 @@ Die Zuordnung und Verarbeitung der Slider wird über eine Konfigurationsdatei fe
 
 ## Inspiration
 
-Die grundlegende Idee für den hardwarebasierten Audio-Mixer sowie die verwendete Arduino-Hardware orientieren sich am Open-Source-Projekt [deej](https://github.com/FabianA2001/deej).
+Die grundlegende Idee für den hardwarebasierten Audio-Mixer, das Icon sowie die verwendete Arduino-Hardware orientieren sich am Open-Source-Projekt [deej](https://github.com/FabianA2001/deej).
 
-Die Umsetzung der PC-seitigen Verarbeitung erfolgt über die eigene Anwendung **WinAudioMixer**. Ein wesentlicher Teil des Quellcodes wurde mithilfe von KI generiert. Die einzelnen Komponenten wurden anschließend integriert, angepasst und auf ihre Funktionalität getestet. 
+Die Umsetzung der PC-seitigen Verarbeitung erfolgt über die eigene Anwendung **WinAudioMixer**. Ein wesentlicher Teil des Quellcodes wurde mithilfe von KI generiert. Die einzelnen Komponenten wurden anschließend integriert, angepasst und auf ihre Funktionalität getestet.
 
 ### Beispiel der Hardware
 
@@ -82,6 +82,3 @@ slider_1=unassigned
 In diesem Beispiel steuert `slider_0` die Lautstärke von **Spotify**.
 
 `slider_1` ist mit `unassigned` gekennzeichnet. Dieser Slider steuert dadurch die Lautstärke aller Programme, die nicht explizit einem anderen Slider zugeordnet wurden.
-
-
-

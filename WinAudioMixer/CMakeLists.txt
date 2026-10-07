@@ -6,6 +6,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if (WIN32)
+    enable_language(RC)
+endif()
+
 # ---------------------------------------------------------------------------
 # Option: Einzelne .exe (keine DLLs nötig, nur config.ini daneben)
 # ---------------------------------------------------------------------------
@@ -66,6 +70,10 @@ add_executable(WinAudioMixer
 )
 
 target_link_libraries(WinAudioMixer PRIVATE win_audio_lib)
+
+if (WIN32)
+    target_sources(WinAudioMixer PRIVATE resources/app.rc)
+endif()
 
 # config.ini nach jedem Build neben die .exe kopieren
 set(WINAUDIO_CONFIG_FILE ${CMAKE_CURRENT_SOURCE_DIR}/config.ini)
