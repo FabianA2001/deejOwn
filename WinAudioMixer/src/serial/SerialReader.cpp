@@ -2,12 +2,27 @@
 
 #include <algorithm>
 #include <cctype>
-#include <fcntl.h>
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <unistd.h>
 #include <utility>
+
+#include "util/Logger.h"
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX            // verhindert min/max-Makros von windows.h
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <termios.h>
+#include <unistd.h>
+#include <sys/types.h>          // ssize_t
+#endif
 
 namespace winaudiomixer {
 namespace {
@@ -68,6 +83,9 @@ bool SerialReader::open(const std::string& port, int baudRate)
         isOpen_ = true;
         return true;
     }
+
+    winaudiomixer::Logger::info("Oeffne Port: " + port_ + " mit Budrate " + std::to_string(baudRate_));
+
 
 #ifdef _WIN32
     std::wstring widePort(port.begin(), port.end());

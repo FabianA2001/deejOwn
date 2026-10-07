@@ -15,8 +15,8 @@
 #include <vector>
 #include <vector>
 
-const int SLIEDERCOUNT = 2;
-const std::string PORT = "/dev/cu.usbmodem1301";
+const int SLIEDERCOUNT = 5;
+const std::string PORT = "COM8";
 const int BAUDRATE = 9600;
 const int FILTERWINDOWSIZE = 20;
 

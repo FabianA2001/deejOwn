@@ -2,6 +2,7 @@
 #include "controller/SliderController.h"
 #include "filter/MedianFilter.h"
 #include "serial/SerialReader.h"
+#include "util/PathUtils.h"
 #ifdef _WIN32
 #include "audio/WindowsAudioMixer.h"
 #else
@@ -20,7 +21,9 @@ int main()
 {
     try
     {
-        const winaudiomixer::Configuration config = winaudiomixer::ConfigParser::parseFile("/Users/fabian/Programmieren/deejOwn/WinAudioMixer/config.ini");
+        const std::filesystem::path configPath = winaudiomixer::getExecutableDir() / "config.ini";
+
+        const winaudiomixer::Configuration config =winaudiomixer::ConfigParser::parseFile(configPath);
         winaudiomixer::Logger::info("Configuration loaded");
 
         winaudiomixer::SerialReader serialReader;
@@ -55,7 +58,7 @@ int main()
             std::vector<int> rawValues;
             if (!serialReader.readValues(rawValues))
             {
-                winaudiomixer::Logger::warning("rawValues is empty");
+                //winaudiomixer::Logger::warning("rawValues is empty");
                 continue;
             }
 
