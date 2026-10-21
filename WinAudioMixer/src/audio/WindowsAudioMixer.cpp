@@ -5,11 +5,27 @@
 #include <psapi.h>
 
 #include <algorithm>
+#include <cwctype>
 
 #pragma comment(lib, "psapi.lib")
 
 namespace winaudiomixer
 {
+
+    // ------------------------------------------------------------
+    // SessionNotificationClient
+    // ------------------------------------------------------------
+
+    HRESULT SessionNotificationClient::OnSessionCreated(IAudioSessionControl *newSession)
+    {
+        if (newSession && m_owner)
+            m_owner->onSessionCreated(newSession);
+        return S_OK;
+    }
+
+    // ------------------------------------------------------------
+    // WindowsAudioMixer
+    // ------------------------------------------------------------
 
     WindowsAudioMixer::WindowsAudioMixer()
     {
@@ -21,16 +37,24 @@ namespace winaudiomixer
         shutdown();
     }
 
+    void WindowsAudioMixer::setNewApplicationCallback(NewApplicationCallback callback)
+    {
+        std::lock_guard<std::mutex> lock(m_callbackMutex);
+        m_newApplicationCallback = std::move(callback);
+    }
+
     bool WindowsAudioMixer::initialize()
     {
-        HRESULT hr;
+        std::lock_guard<std::mutex> lock(m_deviceMutex);
 
         // COM initialisieren
-        hr = CoInitializeEx(
+        HRESULT hr = CoInitializeEx(
             nullptr,
             COINIT_MULTITHREADED);
 
-        if (FAILED(hr) && hr != RPC_E_CHANGED_MODE)
+        if (SUCCEEDED(hr))
+            m_comInitialized = true;
+        else if (hr != RPC_E_CHANGED_MODE)
             return false;
 
         // Device Enumerator
@@ -43,14 +67,66 @@ namespace winaudiomixer
         if (FAILED(hr))
             return false;
 
-        // Standard-Ausgabegerät
-        hr = m_deviceEnumerator->GetDefaultAudioEndpoint(
+        // Benachrichtigung bei Geraetewechsel
+        m_notificationClient = new DeviceNotificationClient(m_deviceChanged);
+        m_deviceEnumerator->RegisterEndpointNotificationCallback(m_notificationClient);
+
+        // Benachrichtigung bei neuen Sessions (einmal anlegen, wird pro Geraet registriert)
+        m_sessionNotification = new SessionNotificationClient(this);
+
+        return acquireDevice();
+    }
+
+    void WindowsAudioMixer::shutdown()
+    {
+        std::lock_guard<std::mutex> lock(m_deviceMutex);
+
+        releaseDevice();
+
+        if (m_deviceEnumerator)
+        {
+            if (m_notificationClient)
+                m_deviceEnumerator->UnregisterEndpointNotificationCallback(m_notificationClient);
+
+            m_deviceEnumerator->Release();
+            m_deviceEnumerator = nullptr;
+        }
+
+        if (m_notificationClient)
+        {
+            m_notificationClient->Release();
+            m_notificationClient = nullptr;
+        }
+
+        if (m_sessionNotification)
+        {
+            m_sessionNotification->Release();
+            m_sessionNotification = nullptr;
+        }
+
+        if (m_comInitialized)
+        {
+            CoUninitialize();
+            m_comInitialized = false;
+        }
+    }
+
+    bool WindowsAudioMixer::acquireDevice() const
+    {
+        if (!m_deviceEnumerator)
+            return false;
+
+        // Standard-Ausgabegeraet
+        HRESULT hr = m_deviceEnumerator->GetDefaultAudioEndpoint(
             eRender,
             eConsole,
             &m_device);
 
         if (FAILED(hr))
+        {
+            m_device = nullptr;
             return false;
+        }
 
         // Audio Session Manager
         hr = m_device->Activate(
@@ -60,15 +136,53 @@ namespace winaudiomixer
             reinterpret_cast<void **>(&m_sessionManager));
 
         if (FAILED(hr))
+        {
+            m_sessionManager = nullptr;
+            m_device->Release();
+            m_device = nullptr;
             return false;
+        }
+
+        // Fuer neue Sessions registrieren
+        if (m_sessionNotification)
+            m_sessionManager->RegisterSessionNotification(m_sessionNotification);
+
+        // Bereits laufende Sessions des (neuen) Geraets ebenfalls als "neue Anwendung" melden.
+        // Der Aufruf von GetSessionEnumerator ist ausserdem noetig, damit die
+        // Benachrichtigungen zuverlaessig ankommen.
+        IAudioSessionEnumerator *enumerator = nullptr;
+
+        if (SUCCEEDED(m_sessionManager->GetSessionEnumerator(&enumerator)) && enumerator)
+        {
+            int count = 0;
+
+            if (SUCCEEDED(enumerator->GetCount(&count)))
+            {
+                for (int i = 0; i < count; ++i)
+                {
+                    IAudioSessionControl *control = nullptr;
+
+                    if (SUCCEEDED(enumerator->GetSession(i, &control)) && control)
+                    {
+                        onSessionCreated(control);
+                        control->Release();
+                    }
+                }
+            }
+
+            enumerator->Release();
+        }
 
         return true;
     }
 
-    void WindowsAudioMixer::shutdown()
+    void WindowsAudioMixer::releaseDevice() const
     {
         if (m_sessionManager)
         {
+            if (m_sessionNotification)
+                m_sessionManager->UnregisterSessionNotification(m_sessionNotification);
+
             m_sessionManager->Release();
             m_sessionManager = nullptr;
         }
@@ -78,27 +192,73 @@ namespace winaudiomixer
             m_device->Release();
             m_device = nullptr;
         }
+    }
 
-        if (m_deviceEnumerator)
+    // m_deviceMutex muss vom Aufrufer gehalten werden
+    bool WindowsAudioMixer::ensureDevice() const
+    {
+        if (m_deviceChanged.exchange(false))
         {
-            m_deviceEnumerator->Release();
-            m_deviceEnumerator = nullptr;
+            releaseDevice();
+            return acquireDevice();
         }
 
-        CoUninitialize();
+        if (!m_sessionManager)
+        {
+            // Frueherer Versuch fehlgeschlagen (z. B. kein Geraet vorhanden): erneut versuchen
+            releaseDevice();
+            return acquireDevice();
+        }
+
+        return true;
+    }
+
+    void WindowsAudioMixer::onSessionCreated(IAudioSessionControl *control) const
+    {
+        if (!control)
+            return;
+
+        // Callback kopieren und ausserhalb des Locks aufrufen
+        NewApplicationCallback callback;
+
+        {
+            std::lock_guard<std::mutex> lock(m_callbackMutex);
+            callback = m_newApplicationCallback;
+        }
+
+        if (!callback)
+            return;
+
+        IAudioSessionControl2 *control2 = nullptr;
+
+        if (FAILED(control->QueryInterface(IID_PPV_ARGS(&control2))) || !control2)
+            return;
+
+        DWORD processId = 0;
+
+        if (SUCCEEDED(control2->GetProcessId(&processId)) && processId != 0)
+        {
+            const std::string name = getProcessName(processId);
+
+            if (!name.empty())
+                callback(name);
+        }
+
+        control2->Release();
     }
 
     bool WindowsAudioMixer::setApplicationVolume(
         const std::string &application,
         float volume)
     {
-        if (!m_sessionManager)
-            return false;
-
         volume = std::clamp(volume, 0.0f, 1.0f);
 
-        const std::wstring targetApplication =
-            stringToWString(application);
+        const std::string target = normalizeName(application);
+
+        std::lock_guard<std::mutex> deviceLock(m_deviceMutex);
+
+        if (!ensureDevice())
+            return false;
 
         IAudioSessionEnumerator *enumerator = nullptr;
 
@@ -153,13 +313,7 @@ namespace winaudiomixer
                 continue;
             }
 
-            const std::string processName =
-                getProcessName(processId);
-
-            const std::wstring processNameW =
-                stringToWString(processName);
-
-            if (processNameW == targetApplication)
+            if (normalizeName(getProcessName(processId)) == target)
             {
                 ISimpleAudioVolume *simpleVolume = nullptr;
 
@@ -193,7 +347,9 @@ namespace winaudiomixer
     {
         std::vector<std::string> result;
 
-        if (!m_sessionManager)
+        std::lock_guard<std::mutex> deviceLock(m_deviceMutex);
+
+        if (!ensureDevice())
             return result;
 
         IAudioSessionEnumerator *enumerator = nullptr;
@@ -309,6 +465,21 @@ namespace winaudiomixer
         return result;
     }
 
+    // Prozessnamen vergleichbar machen (Gross-/Kleinschreibung egal)
+    std::string WindowsAudioMixer::normalizeName(const std::string &value)
+    {
+        std::wstring wide = stringToWString(value);
+
+        std::transform(
+            wide.begin(),
+            wide.end(),
+            wide.begin(),
+            [](wchar_t c)
+            { return static_cast<wchar_t>(std::towlower(c)); });
+
+        return wStringToString(wide);
+    }
+
     std::wstring WindowsAudioMixer::stringToWString(
         const std::string &value)
     {
@@ -375,4 +546,4 @@ namespace winaudiomixer
 
 } // namespace winaudiomixer
 
-#endif
+#endif // _WIN32

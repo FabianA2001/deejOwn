@@ -24,6 +24,13 @@ public:
 
     std::vector<ApplicationVolumeChange> process(const std::vector<int>& filteredValues, const IAudioMixer& audioMixer);
 
+    // Fuer neu aufgetauchte Audioquellen: sucht den passenden Slider (explizite Zuordnung
+    // oder "unassigned") und gibt die Lautstaerke zurueck, die der Slider gerade hat.
+    // Ignoriert die Deadzone und aendert lastAppliedValues_ nicht.
+    std::vector<ApplicationVolumeChange> processNewApplications(
+        const std::vector<std::string>& newApplications,
+        const std::vector<int>& filteredValues) const;
+
     static float sliderValueToVolume(int sliderValue);
 
 private:

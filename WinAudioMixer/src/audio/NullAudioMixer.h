@@ -4,6 +4,7 @@
 
 #include <map>
 #include <string>
+#include <vector>
 
 namespace winaudiomixer
 {
@@ -13,6 +14,7 @@ namespace winaudiomixer
     public:
         bool setApplicationVolume(const std::string &application, float volume) override;
         std::vector<std::string> getAvailableApplications() const override;
+        void setNewApplicationCallback(NewApplicationCallback callback) override;
         void printVolumes() const;
 
         const std::map<std::string, float> &volumes() const noexcept;

@@ -11,10 +11,11 @@
 #include "util/Logger.h"
 #include <thread>
 #include <chrono>
+#include <filesystem>
 #include <iostream>
+#include <mutex>
 #include <stdexcept>
 #include <string>
-#include <vector>
 #include <vector>
 
 int main()
@@ -23,7 +24,7 @@ int main()
     {
         const std::filesystem::path configPath = winaudiomixer::getExecutableDir() / "config.ini";
 
-        const winaudiomixer::Configuration config =winaudiomixer::ConfigParser::parseFile(configPath);
+        const winaudiomixer::Configuration config = winaudiomixer::ConfigParser::parseFile(configPath);
         winaudiomixer::Logger::info("Configuration loaded");
 
         winaudiomixer::SerialReader serialReader;
@@ -43,6 +44,11 @@ int main()
             controller.setMapping(sliderIndex, programs);
         }
 
+        // Neue Audioquellen werden vom Windows-Thread hier abgelegt und im Hauptthread abgeholt.
+        // Muss VOR dem AudioMixer deklariert werden, damit es laenger lebt als der Callback.
+        std::mutex newApplicationsMutex;
+        std::vector<std::string> newApplications;
+
 #ifdef _WIN32
         winaudiomixer::Logger::info("Using Windows Audio Mixer");
         winaudiomixer::WindowsAudioMixer audioMixer;
@@ -50,25 +56,46 @@ int main()
         winaudiomixer::Logger::info("Using Null Audio Mixer (not on Windows)");
         winaudiomixer::NullAudioMixer audioMixer;
 #endif
+        audioMixer.setNewApplicationCallback([&](const std::string &application)
+                                             {
+            std::lock_guard<std::mutex> lock(newApplicationsMutex);
+            newApplications.push_back(application); });
+
         int readcounter = 0;
         while (true)
         {
-            //std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            // std::this_thread::sleep_for(std::chrono::milliseconds(5));
             readcounter++;
             std::vector<int> rawValues;
             if (!serialReader.readValues(rawValues))
             {
-                //winaudiomixer::Logger::warning("rawValues is empty");
+                // winaudiomixer::Logger::warning("rawValues is empty");
                 continue;
             }
 
             const std::vector<int> filteredValues = filter.process(rawValues);
 
-            if (readcounter < 10)
-                continue;
-            readcounter = 0;
+            // Neu aufgetauchte Audioquellen sofort auf den aktuellen Sliderwert setzen
+            std::vector<std::string> pendingApplications;
+            if (!filteredValues.empty())
+            {
+                std::lock_guard<std::mutex> lock(newApplicationsMutex);
+                pendingApplications.swap(newApplications);
+            }
 
-            const std::vector<winaudiomixer::ApplicationVolumeChange> changes = controller.process(filteredValues, audioMixer);
+            std::vector<winaudiomixer::ApplicationVolumeChange> changes =
+                controller.processNewApplications(pendingApplications, filteredValues);
+
+            // Normale Slider-Aenderungen nur alle 10 Lesevorgaenge
+            if (readcounter >= 10)
+            {
+                readcounter = 0;
+
+                const std::vector<winaudiomixer::ApplicationVolumeChange> sliderChanges =
+                    controller.process(filteredValues, audioMixer);
+
+                changes.insert(changes.end(), sliderChanges.begin(), sliderChanges.end());
+            }
 
             for (const auto &change : changes)
             {

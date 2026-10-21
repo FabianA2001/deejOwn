@@ -22,6 +22,11 @@ namespace winaudiomixer
             "Teams"};
     }
 
+    void NullAudioMixer::setNewApplicationCallback(IAudioMixer::NewApplicationCallback)
+    {
+        // Dummy: Der NullAudioMixer hat keine echten Audioquellen, die neu auftauchen koennten.
+    }
+
     const std::map<std::string, float> &NullAudioMixer::volumes() const noexcept
     {
         return volumes_;
