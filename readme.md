@@ -26,7 +26,7 @@ Beispiel:
 
 ```ini
 [Serial]
-port=/dev/cu.usbmodem1301
+port=COM9
 baudrate=9600
 slider_count=2
 
