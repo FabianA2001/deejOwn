@@ -61,9 +61,28 @@ int main()
             std::lock_guard<std::mutex> lock(newApplicationsMutex);
             newApplications.push_back(application); });
 
+#ifdef _WIN32
+        // Zustand der F13-Taste (fuer Flankenerkennung: nur beim Druecken ausloesen, nicht beim Halten)
+        bool f13WasDown = false;
+#endif
+
         int readcounter = 0;
         while (true)
         {
+#ifdef _WIN32
+            // F13 gedrueckt -> naechstes Audioausgabegeraet waehlen
+            const bool f13Down = (GetAsyncKeyState(VK_F13) & 0x8000) != 0;
+            if (f13Down && !f13WasDown)
+            {
+                const std::string deviceName = audioMixer.cycleOutputDevice();
+                if (!deviceName.empty())
+                    winaudiomixer::Logger::info("Audio output switched to: " + deviceName);
+                else
+                    winaudiomixer::Logger::warning("Could not switch audio output device");
+            }
+            f13WasDown = f13Down;
+#endif
+
             // std::this_thread::sleep_for(std::chrono::milliseconds(5));
             readcounter++;
             std::vector<int> rawValues;

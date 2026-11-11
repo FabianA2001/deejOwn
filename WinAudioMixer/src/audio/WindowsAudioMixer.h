@@ -118,6 +118,10 @@ namespace winaudiomixer
 
         void setNewApplicationCallback(NewApplicationCallback callback) override;
 
+        // Wechselt zum naechsten aktiven Ausgabegeraet (zyklisch).
+        // Rueckgabe: Name des neuen Geraets, leer bei Fehler / nur einem Geraet.
+        std::string cycleOutputDevice() override;
+
         // Wird vom SessionNotificationClient aufgerufen (fremder Thread)
         void onSessionCreated(IAudioSessionControl *control) const;
 
@@ -145,9 +149,9 @@ namespace winaudiomixer
         bool initialize();
         void shutdown();
 
-        bool acquireDevice() const;  // Geraet + SessionManager holen, Registrierung
-        void releaseDevice() const;  // Abmelden + beides freigeben
-        bool ensureDevice() const;   // bei Bedarf neu holen (m_deviceMutex muss gehalten werden)
+        bool acquireDevice() const; // Geraet + SessionManager holen, Registrierung
+        void releaseDevice() const; // Abmelden + beides freigeben
+        bool ensureDevice() const;  // bei Bedarf neu holen (m_deviceMutex muss gehalten werden)
 
         std::string getProcessName(DWORD processId) const;
 

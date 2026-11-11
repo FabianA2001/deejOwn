@@ -2,12 +2,37 @@
 
 #include "WindowsAudioMixer.h"
 
+#include <functiondiscoverykeys_devpkey.h>
+#include <propidl.h>
 #include <psapi.h>
 
 #include <algorithm>
 #include <cwctype>
 
 #pragma comment(lib, "psapi.lib")
+
+// ------------------------------------------------------------
+// Undokumentiertes Windows-Interface zum Setzen des Standardgeraets.
+// (Wird u. a. von SoundSwitch, AudioDeviceCmdlets usw. genutzt.)
+// Nicht benoetigte Methoden sind mit void* deklariert, es zaehlt nur das vtable-Layout.
+// ------------------------------------------------------------
+struct DECLSPEC_UUID("f8679f50-850a-41cf-9c72-430f290290c8") IPolicyConfig : public IUnknown
+{
+    virtual HRESULT STDMETHODCALLTYPE GetMixFormat(PCWSTR, void *) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetDeviceFormat(PCWSTR, INT, void *) = 0;
+    virtual HRESULT STDMETHODCALLTYPE ResetDeviceFormat(PCWSTR) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetDeviceFormat(PCWSTR, void *, void *) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetProcessingPeriod(PCWSTR, INT, void *, void *) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetProcessingPeriod(PCWSTR, void *) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetShareMode(PCWSTR, void *) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetShareMode(PCWSTR, void *) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetPropertyValue(PCWSTR, const void *, void *) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetPropertyValue(PCWSTR, const void *, void *) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetDefaultEndpoint(PCWSTR deviceId, ERole role) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetEndpointVisibility(PCWSTR, INT) = 0;
+};
+
+class DECLSPEC_UUID("870af99c-171d-4f9e-af0d-e63df40c2bc9") CPolicyConfigClient;
 
 namespace winaudiomixer
 {
@@ -245,6 +270,147 @@ namespace winaudiomixer
         }
 
         control2->Release();
+    }
+
+    std::string WindowsAudioMixer::cycleOutputDevice()
+    {
+        struct DeviceInfo
+        {
+            std::wstring id;
+            std::wstring name;
+        };
+
+        std::lock_guard<std::mutex> deviceLock(m_deviceMutex);
+
+        if (!m_deviceEnumerator)
+            return {};
+
+        // Alle aktiven Ausgabegeraete auflisten
+        IMMDeviceCollection *collection = nullptr;
+
+        HRESULT hr = m_deviceEnumerator->EnumAudioEndpoints(
+            eRender,
+            DEVICE_STATE_ACTIVE,
+            &collection);
+
+        if (FAILED(hr) || !collection)
+            return {};
+
+        UINT count = 0;
+
+        if (FAILED(collection->GetCount(&count)) || count < 2)
+        {
+            // Mit 0 oder 1 Geraet gibt es nichts zum Wechseln
+            collection->Release();
+            return {};
+        }
+
+        std::vector<DeviceInfo> devices;
+
+        for (UINT i = 0; i < count; ++i)
+        {
+            IMMDevice *device = nullptr;
+
+            if (FAILED(collection->Item(i, &device)) || !device)
+                continue;
+
+            DeviceInfo info;
+
+            LPWSTR id = nullptr;
+
+            if (SUCCEEDED(device->GetId(&id)) && id)
+            {
+                info.id = id;
+                CoTaskMemFree(id);
+            }
+
+            IPropertyStore *props = nullptr;
+
+            if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &props)) && props)
+            {
+                PROPVARIANT variant;
+                PropVariantInit(&variant);
+
+                if (SUCCEEDED(props->GetValue(PKEY_Device_FriendlyName, &variant)) &&
+                    variant.vt == VT_LPWSTR && variant.pwszVal)
+                {
+                    info.name = variant.pwszVal;
+                }
+
+                PropVariantClear(&variant);
+                props->Release();
+            }
+
+            device->Release();
+
+            if (!info.id.empty())
+                devices.push_back(std::move(info));
+        }
+
+        collection->Release();
+
+        if (devices.size() < 2)
+            return {};
+
+        // ID des aktuellen Standardgeraets ermitteln
+        std::wstring currentId;
+
+        IMMDevice *current = nullptr;
+
+        if (SUCCEEDED(m_deviceEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &current)) && current)
+        {
+            LPWSTR id = nullptr;
+
+            if (SUCCEEDED(current->GetId(&id)) && id)
+            {
+                currentId = id;
+                CoTaskMemFree(id);
+            }
+
+            current->Release();
+        }
+
+        // Naechstes Geraet waehlen (ist das aktuelle nicht in der Liste, wird das erste genommen)
+        size_t nextIndex = 0;
+
+        for (size_t i = 0; i < devices.size(); ++i)
+        {
+            if (devices[i].id == currentId)
+            {
+                nextIndex = (i + 1) % devices.size();
+                break;
+            }
+        }
+
+        const DeviceInfo &next = devices[nextIndex];
+
+        // Als Standardgeraet setzen (alle drei Rollen)
+        IPolicyConfig *policy = nullptr;
+
+        hr = CoCreateInstance(
+            __uuidof(CPolicyConfigClient),
+            nullptr,
+            CLSCTX_ALL,
+            IID_PPV_ARGS(&policy));
+
+        if (FAILED(hr) || !policy)
+            return {};
+
+        bool ok = true;
+
+        ok &= SUCCEEDED(policy->SetDefaultEndpoint(next.id.c_str(), eConsole));
+        ok &= SUCCEEDED(policy->SetDefaultEndpoint(next.id.c_str(), eMultimedia));
+        ok &= SUCCEEDED(policy->SetDefaultEndpoint(next.id.c_str(), eCommunications));
+
+        policy->Release();
+
+        if (!ok)
+            return {};
+
+        // Beim naechsten ensureDevice() Geraet + SessionManager neu holen
+        m_deviceChanged = true;
+
+        return wStringToString(next.name.empty() ? next.id : next.name);
     }
 
     bool WindowsAudioMixer::setApplicationVolume(
